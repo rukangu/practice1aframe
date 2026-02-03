@@ -2,90 +2,73 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>Modular AR/VR Classroom Example</title>
+    <title>Classroom AR/VR Setup</title>
     <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
     <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
 
     <script>
-      /* * COMPONENT 1: HIDE IN AR
-       * This hides the background environment when you enter AR (Passthrough) mode.
-       */
-      AFRAME.registerComponent('hide-in-ar-mode', {
-        init: function () {
-          this.el.sceneEl.addEventListener('enter-vr', (ev) => {
-            if (this.el.sceneEl.is('ar-mode')) {
-              this.el.setAttribute('visible', false);
-            }
-          });
-          this.el.sceneEl.addEventListener('exit-vr', (ev) => {
-            this.el.setAttribute('visible', true);
-          });
-        }
-      });
-
-      /* * COMPONENT 2: CONTROLLER GRAB
-       * Allows VR Controllers (Quest/Vive) to grab objects with the Trigger button.
-       * Works alongside hand tracking.
+      /* * CUSTOM COMPONENT: CONTROLLER GRAB
+       * This forces the laser pointer to "stick" to objects when the trigger is held.
        */
       AFRAME.registerComponent('controller-grab', {
         init: function () {
           this.grabbedEl = null;
-          
-          // When trigger is pressed
+          this.raycaster = this.el.components.raycaster;
+
           this.el.addEventListener('triggerdown', (evt) => {
-            // Raycaster looks for objects with class "grabbable"
-            const intersection = this.el.components.raycaster.getIntersection(document.querySelector('.grabbable'));
+            // 1. Get the raycaster component attached to this controller
+            const raycaster = this.el.components.raycaster;
+            if (!raycaster) return;
+
+            // 2. Find closest intersection with ".grabbable" objects
+            // We specifically ask for the list of intersected objects
+            const intersections = raycaster.intersectedEls;
             
-            if (intersection) {
-              const object = intersection.object.el;
-              this.grabbedEl = object;
+            if (intersections.length > 0) {
+              // The first item is the closest one
+              const objectToGrab = intersections[0];
               
-              // "Parent" the object to the controller to make it follow
-              object.object3D.attach(this.el.object3D); 
+              // 3. Double check it has the class we want
+              if (objectToGrab.classList.contains('grabbable')) {
+                this.grabbedEl = objectToGrab;
+                
+                // 4. Attach object to controller (this makes it follow you)
+                this.grabbedEl.object3D.attach(this.el.object3D);
+              }
             }
           });
 
-          // When trigger is released
           this.el.addEventListener('triggerup', (evt) => {
             if (this.grabbedEl) {
-              // "Unparent" - put it back in the scene
+              // 5. Unparent (put it back in the world)
               this.el.sceneEl.object3D.attach(this.grabbedEl.object3D);
               this.grabbedEl = null;
             }
           });
         }
       });
-      
-      /*
-       * COMPONENT 3: SIMPLE GRABBABLE (For Hands)
-       * A dummy component to mark objects so the Hand Tracking system knows they can be grabbed.
-       */
-      AFRAME.registerComponent('grabbable', {
-        init: function () {
-          this.el.classList.add('grabbable'); // Add class for the raycaster
-        }
-      });
-
     </script>
   </head>
-  
+
   <body>
     <a-scene 
-      renderer="alpha: true" 
+      xr-mode-ui="XRMode: xr" 
       webxr="optionalFeatures: hit-test"
-      obb-collider="showColliders: false">
+      renderer="colorManagement: true; exposure: 1; toneMapping: ACESFilmic"
+      shadow="type: pcfsoft">
 
       <a-assets>
         <img id="ubuntu-img" src="https://cdn.jsdelivr.net/gh/aframevr/aframe@master/examples/showcase/hand-tracking/images/ubuntu-desktop.png" crossorigin="anonymous">
-        
         <a-asset-item id="my-model" src="https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Duck/glTF-Binary/Duck.glb"></a-asset-item>
       </a-assets>
 
-      <a-entity id="environment" environment="preset: forest; lighting: none; shadow: true" hide-in-ar-mode></a-entity>
-      <a-light type="directional" intensity="0.5" position="1 1 1"></a-light>
-      <a-light type="ambient" intensity="0.7"></a-light>
+      <a-entity environment="preset: forest; lighting: none; shadow: true" hide-on-enter-ar></a-entity>
+      
+      <a-light type="directional" intensity="1" position="-1 2 2" cast-shadow="true"></a-light>
+      <a-light type="ambient" intensity="0.6"></a-light>
 
-      <a-entity position="-0.6 1.6 -0.5" rotation="0 10 0" grabbable>
+
+      <a-entity position="-0.5 1.6 -0.5" class="grabbable" grabbable>
          <a-box depth="0.02" height="0.6" width="1" material="src: #ubuntu-img" color="white"></a-box>
       </a-entity>
 
@@ -93,8 +76,10 @@
         gltf-model="#my-model" 
         position="0.5 1.6 -0.5" 
         scale="0.5 0.5 0.5" 
+        class="grabbable" 
         grabbable>
       </a-entity>
+
 
       <a-entity camera position="0 1.6 0" look-controls wasd-controls></a-entity>
 
