@@ -1,104 +1,212 @@
 <!DOCTYPE html>
 <html>
-<head>
-  <meta charset="utf-8">
-  <title>AR/VR Physics Classroom</title>
+  <head>
+    <meta charset="utf-8">
+    <title>claudePhysics Classroom</title>
+    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+    <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
 
-  <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
-  <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
-
-  <script>
-    AFRAME.registerComponent('physics-grab', {
-      init() {
-        this.grabbedEl = null;
-        this.prevPos = new THREE.Vector3();
-        this.currPos = new THREE.Vector3();
-
-        this.el.addEventListener('grab-start', e => {
-          const target = e.detail.target;
-          if (!target || !target.classList.contains('grabbable')) return;
-
-          this.grabbedEl = target;
-
-          if (target.body) {
-            target.body.type = CANNON.Body.KINEMATIC;
-            target.body.velocity.set(0, 0, 0);
-            target.body.angularVelocity.set(0, 0, 0);
-          }
-
-          target.object3D.position.set(0, 0, 0);
-          this.el.object3D.attach(target.object3D);
-        });
-
-        this.el.addEventListener('grab-end', () => {
-          if (!this.grabbedEl) return;
-
-          this.el.sceneEl.object3D.attach(this.grabbedEl.object3D);
-
-          if (this.grabbedEl.body) {
-            this.grabbedEl.body.type = CANNON.Body.DYNAMIC;
-            const throwVel = this.currPos.clone()
-              .sub(this.prevPos)
-              .multiplyScalar(200);
-            this.grabbedEl.body.velocity.copy(throwVel);
-          }
-
+    <script>
+      /* COMPONENT: PHYSICS GRAB
+       * Handles grabbing for both simple objects and physics objects.
+       * Allows "Throwing" by calculating velocity on release.
+       */
+      AFRAME.registerComponent('physics-grab', {
+        init: function () {
           this.grabbedEl = null;
-        });
-      },
+          this.grabOffset = new THREE.Vector3();
+          this.previousPosition = new THREE.Vector3();
+          this.currentPosition = new THREE.Vector3();
+          this.velocities = [];
 
-      tick() {
-        this.prevPos.copy(this.currPos);
-        this.el.object3D.getWorldPosition(this.currPos);
-      }
-    });
-  </script>
-</head>
+          // GRAB (Trigger Down)
+          this.el.addEventListener('triggerdown', (evt) => {
+            if (this.grabbedEl) return; // Already holding something
 
-<body>
-<a-scene physics="gravity: -9.8">
+            // Find what we are pointing at
+            const raycaster = this.el.components.raycaster;
+            if (!raycaster) return;
+            
+            const intersections = raycaster.intersectedEls;
+            if (intersections.length === 0) return;
 
-  <a-assets>
-    <img id="ubuntu" src="https://upload.wikimedia.org/wikipedia/commons/a/a3/Ubuntu_logo_and_wordmark.svg">
-    <a-asset-item id="duck" src="https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Duck/glTF-Binary/Duck.glb"></a-asset-item>
-  </a-assets>
+            const object = intersections[0];
 
-  <a-entity environment="preset: forest"></a-entity>
+            // Only grab if it has the "grabbable" class
+            if (object.classList.contains('grabbable')) {
+              this.grabbedEl = object;
+              this.velocities = [];
+              
+              // Calculate offset from controller to object
+              const controllerPos = new THREE.Vector3();
+              const objectPos = new THREE.Vector3();
+              this.el.object3D.getWorldPosition(controllerPos);
+              this.grabbedEl.object3D.getWorldPosition(objectPos);
+              this.grabOffset.copy(objectPos).sub(controllerPos);
+              
+              // PHYSICS LOGIC: If it has physics, make it kinematic
+              if (this.grabbedEl.body) {
+                this.grabbedEl.body.type = 2; // KINEMATIC = 2
+                this.grabbedEl.body.velocity.set(0, 0, 0);
+                this.grabbedEl.body.angularVelocity.set(0, 0, 0);
+              }
+            }
+          });
 
-  <a-box static-body rotation="-90 0 0" width="50" height="50" depth="0.1"></a-box>
+          // RELEASE (Trigger Up)
+          this.el.addEventListener('triggerup', (evt) => {
+            if (this.grabbedEl) {
+              // PHYSICS LOGIC: Throwing
+              if (this.grabbedEl.body) {
+                // Turn gravity back on (DYNAMIC = 1)
+                this.grabbedEl.body.type = 1;
+                
+                // Calculate average velocity from recent hand movements
+                if (this.velocities.length > 0) {
+                  const avgVel = new THREE.Vector3();
+                  this.velocities.forEach(v => avgVel.add(v));
+                  avgVel.divideScalar(this.velocities.length);
+                  
+                  // Apply throw velocity (scaled up for better feel)
+                  this.grabbedEl.body.velocity.set(
+                    avgVel.x * 3,
+                    avgVel.y * 3,
+                    avgVel.z * 3
+                  );
+                }
+              }
 
-  <a-box class="grabbable"
-         dynamic-body
-         position="0 1.5 -0.6"
-         width="0.6" height="0.4" depth="0.05"
-         material="src:#ubuntu">
-  </a-box>
+              this.grabbedEl = null;
+              this.velocities = [];
+            }
+          });
+        },
 
-  <a-entity class="grabbable"
-            dynamic-body
-            gltf-model="#duck"
-            position="0.4 1.6 -0.5"
-            scale="0.5 0.5 0.5">
-  </a-entity>
+        // Track hand position every frame to calculate throw speed
+        tick: function (time, timeDelta) {
+          // Update position tracking
+          this.previousPosition.copy(this.currentPosition);
+          this.el.object3D.getWorldPosition(this.currentPosition);
+          
+          // If holding an object, move it with the controller
+          if (this.grabbedEl && timeDelta > 0) {
+            const targetPos = new THREE.Vector3();
+            this.el.object3D.getWorldPosition(targetPos);
+            targetPos.add(this.grabOffset);
+            
+            // Move the object
+            this.grabbedEl.object3D.position.copy(targetPos);
+            
+            // Calculate velocity for throwing
+            const deltaTime = timeDelta / 1000; // Convert to seconds
+            if (deltaTime > 0) {
+              const velocity = this.currentPosition.clone()
+                .sub(this.previousPosition)
+                .divideScalar(deltaTime);
+              
+              this.velocities.push(velocity);
+              // Keep only last 5 frames for averaging
+              if (this.velocities.length > 5) {
+                this.velocities.shift();
+              }
+            }
+          }
+        }
+      });
+    </script>
+  </head>
 
-  <a-entity camera position="0 1.6 0"></a-entity>
+  <body>
+    <a-scene 
+      physics="driver: cannon; gravity: 0 -9.8 0; debug: false"
+      xr-mode-ui="enabled: true" 
+      webxr="requiredFeatures: hit-test,local-floor; optionalFeatures: hand-tracking"
+      renderer="colorManagement: true; physicallyCorrectLights: true">
 
-  <!-- Hands -->
-  <a-entity hand-tracking-controls="hand: left" physics-grab></a-entity>
-  <a-entity hand-tracking-controls="hand: right" physics-grab></a-entity>
+      <a-assets>
+        <img id="ubuntu-img" src="https://upload.wikimedia.org/wikipedia/commons/thumb/a/a3/Ubuntu_logo_and_wordmark.svg/512px-Ubuntu_logo_and_wordmark.svg.png" crossorigin="anonymous">
+        
+        <a-asset-item id="my-model" src="https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Duck/glTF-Binary/Duck.glb"></a-asset-item>
+      </a-assets>
 
-  <!-- Controllers -->
-  <a-entity laser-controls="hand: left"
-            raycaster="objects: .grabbable"
-            grab-controls
-            physics-grab></a-entity>
+      <!-- Environment (VR only) -->
+      <a-entity environment="preset: forest; lighting: none; shadow: true"></a-entity>
+      
+      <!-- Floor for physics -->
+      <a-box 
+        position="0 0 0" 
+        rotation="0 0 0" 
+        width="100" 
+        height="0.1" 
+        depth="100" 
+        static-body 
+        material="color: #7BC8A4; opacity: 0.8"
+        shadow="receive: true">
+      </a-box>
 
-  <a-entity laser-controls="hand: right"
-            raycaster="objects: .grabbable"
-            grab-controls
-            physics-grab></a-entity>
+      <!-- Lighting -->
+      <a-light type="directional" intensity="0.8" position="-1 2 2" castShadow="true"></a-light>
+      <a-light type="ambient" intensity="0.5"></a-light>
 
-</a-scene>
-</body>
+      <!-- Ubuntu poster (no physics) -->
+      <a-box 
+        position="-1 1.5 -2" 
+        depth="0.05" 
+        height="0.6" 
+        width="1" 
+        material="src: #ubuntu-img; color: white"
+        class="grabbable">
+      </a-box>
+
+      <!-- Duck model with physics -->
+      <a-entity 
+        gltf-model="#my-model" 
+        position="0.5 2 -2" 
+        scale="0.01 0.01 0.01" 
+        class="grabbable" 
+        dynamic-body="shape: hull; mass: 1"
+        shadow="cast: true; receive: true">
+      </a-entity>
+
+      <!-- Red cube with physics -->
+      <a-box 
+        position="0 2 -2" 
+        color="#FF3333" 
+        scale="0.2 0.2 0.2" 
+        class="grabbable" 
+        dynamic-body="mass: 1"
+        shadow="cast: true; receive: true">
+      </a-box>
+
+      <!-- Blue sphere with physics -->
+      <a-sphere 
+        position="-0.5 2.5 -2" 
+        color="#3333FF" 
+        radius="0.15" 
+        class="grabbable" 
+        dynamic-body="mass: 0.5; sphereRadius: 0.15"
+        shadow="cast: true; receive: true">
+      </a-sphere>
+
+      <!-- Camera for desktop testing -->
+      <a-entity camera position="0 1.6 0" look-controls wasd-controls></a-entity>
+
+      <!-- VR Controllers with grab ability -->
+      <a-entity 
+        id="rightControl" 
+        laser-controls="hand: right" 
+        raycaster="objects: .grabbable; far: 5; showLine: true"
+        physics-grab>
+      </a-entity>
+      
+      <a-entity 
+        id="leftControl" 
+        laser-controls="hand: left" 
+        raycaster="objects: .grabbable; far: 5; showLine: true"
+        physics-grab>
+      </a-entity>
+
+    </a-scene>
+  </body>
 </html>
