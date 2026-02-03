@@ -2,49 +2,76 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>AR with grab setup</title>
+    <title>AR/VR Physics Classroom</title>
     <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
     <script src="https://unpkg.com/aframe-environment-component@1.3.3/dist/aframe-environment-component.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
 
     <script>
-      /* * CUSTOM COMPONENT: CONTROLLER GRAB
-       * This forces the laser pointer to "stick" to objects when the trigger is held.
+      /* * COMPONENT: PHYSICS GRAB
+       * Handles grabbing for both simple objects and physics objects.
+       * Allows "Throwing" by calculating velocity on release.
        */
-      AFRAME.registerComponent('controller-grab', {
+      AFRAME.registerComponent('physics-grab', {
         init: function () {
           this.grabbedEl = null;
           this.raycaster = this.el.components.raycaster;
+          this.previousPosition = new THREE.Vector3();
+          this.currentPosition = new THREE.Vector3();
 
+          // GRAB (Trigger Down)
           this.el.addEventListener('triggerdown', (evt) => {
-            // 1. Get the raycaster component attached to this controller
-            const raycaster = this.el.components.raycaster;
-            if (!raycaster) return;
+            // Find what we are pointing at
+            const intersections = this.raycaster.intersectedEls;
+            if (intersections.length === 0) return;
 
-            // 2. Find closest intersection with ".grabbable" objects
-            // We specifically ask for the list of intersected objects
-            const intersections = raycaster.intersectedEls;
-            
-            if (intersections.length > 0) {
-              // The first item is the closest one
-              const objectToGrab = intersections[0];
+            const object = intersections[0]; // Get closest object
+
+            // Only grab if it has the "grabbable" class
+            if (object.classList.contains('grabbable')) {
+              this.grabbedEl = object;
               
-              // 3. Double check it has the class we want
-              if (objectToGrab.classList.contains('grabbable')) {
-                this.grabbedEl = objectToGrab;
-                
-                // 4. Attach object to controller (this makes it follow you)
-                this.grabbedEl.object3D.attach(this.el.object3D);
+              // PHYSICS LOGIC:
+              // If it has physics, we must turn it "Kinematic" 
+              // (meaning: it ignores gravity but follows our hand)
+              if (this.grabbedEl.body) {
+                this.grabbedEl.setAttribute('ammo-body', {type: 'kinematic'}); // For Ammo
+                this.grabbedEl.body.type = CANNON.Body.KINEMATIC; // For Cannon (default)
+                this.grabbedEl.body.velocity.set(0,0,0);
               }
+
+              // Attach to controller visually
+              this.grabbedEl.object3D.attach(this.el.object3D);
             }
           });
 
+          // RELEASE (Trigger Up)
           this.el.addEventListener('triggerup', (evt) => {
             if (this.grabbedEl) {
-              // 5. Unparent (put it back in the world)
+              // 1. Put it back in the scene
               this.el.sceneEl.object3D.attach(this.grabbedEl.object3D);
+
+              // 2. PHYSICS LOGIC: Throwing
+              if (this.grabbedEl.body) {
+                // Turn gravity back on
+                this.grabbedEl.body.type = CANNON.Body.DYNAMIC; 
+                
+                // Calculate throw velocity based on how fast hand was moving
+                // We scale it up (x2) to make the throw feel better
+                const velocity = this.currentPosition.clone().sub(this.previousPosition).multiplyScalar(250); 
+                
+                this.grabbedEl.body.velocity.copy(velocity);
+              }
+
               this.grabbedEl = null;
             }
           });
+        },
+
+        // We track hand position every frame to calculate throw speed
+        tick: function (time, timeDelta) {
+          this.previousPosition.copy(this.currentPosition);
+          this.el.object3D.getWorldPosition(this.currentPosition);
         }
       });
     </script>
@@ -52,33 +79,52 @@
 
   <body>
     <a-scene 
+      physics="debug: false; gravity: -9.8"
       xr-mode-ui="XRMode: xr" 
       webxr="optionalFeatures: hit-test"
-      renderer="colorManagement: true; exposure: 1; toneMapping: ACESFilmic"
-      shadow="type: pcfsoft">
+      renderer="colorManagement: true; exposure: 1; toneMapping: ACESFilmic">
 
       <a-assets>
-        <img id="ubuntu-img" src="https://cdn.jsdelivr.net/gh/aframevr/aframe@master/examples/showcase/hand-tracking/images/ubuntu-desktop.png" crossorigin="anonymous">
+        <img id="ubuntu-img" src="https://upload.wikimedia.org/wikipedia/commons/thumb/a/a3/Ubuntu_logo_and_wordmark.svg/512px-Ubuntu_logo_and_wordmark.svg.png" crossorigin="anonymous">
+        
         <a-asset-item id="my-model" src="https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Duck/glTF-Binary/Duck.glb"></a-asset-item>
+        
+        <a-mixin id="physics-object" dynamic-body="shape: hull; mass: 5"></a-mixin>
       </a-assets>
 
       <a-entity environment="preset: forest; lighting: none; shadow: true" hide-on-enter-ar></a-entity>
       
+      <a-box 
+        position="0 0 0" 
+        rotation="-90 0 0" 
+        width="100" height="100" depth="0.1" 
+        static-body 
+        visible="false">
+      </a-box>
+
       <a-light type="directional" intensity="1" position="-1 2 2" cast-shadow="true"></a-light>
       <a-light type="ambient" intensity="0.6"></a-light>
 
 
-      <a-entity position="-0.5 1.6 -0.5" class="grabbable" grabbable>
-         <a-box depth="0.02" height="0.6" width="1" material="src: #ubuntu-img" color="white"></a-box>
+      <a-entity position="-0.5 1.6 -0.5" class="grabbable">
+         <a-box depth="0.05" height="0.6" width="1" material="src: #ubuntu-img; color: white"></a-box>
       </a-entity>
 
       <a-entity 
         gltf-model="#my-model" 
-        position="0.5 1.6 -0.5" 
+        position="0.5 2 -0.5" 
         scale="0.5 0.5 0.5" 
         class="grabbable" 
-        grabbable>
+        mixin="physics-object">
       </a-entity>
+
+      <a-box 
+        position="0.2 2 -0.5" 
+        color="red" 
+        scale="0.2 0.2 0.2" 
+        class="grabbable" 
+        mixin="physics-object">
+      </a-box>
 
 
       <a-entity camera position="0 1.6 0" look-controls wasd-controls></a-entity>
@@ -89,12 +135,12 @@
       <a-entity id="rightControl" 
                 laser-controls="hand: right" 
                 raycaster="objects: .grabbable; far: 5"
-                controller-grab>
+                physics-grab>
       </a-entity>
       <a-entity id="leftControl" 
                 laser-controls="hand: left" 
                 raycaster="objects: .grabbable; far: 5"
-                controller-grab>
+                physics-grab>
       </a-entity>
 
     </a-scene>
